@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'" />
+  <title>Social Preview Studio</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="side-brand">
+        <span class="side-logo"></span>
+        <span class="side-name">Social Preview<br>Studio</span>
+        <button id="themeToggle" class="theme-toggle" type="button" title="Switch between light and dark" aria-label="Switch appearance">
+          <span class="tt-ico" data-i="moon"></span>
+        </button>
+      </div>
+
+      <nav class="side-nav" id="sideNav">
+        <button class="nav-item on" data-nav="compose"><span class="ni-ico" data-i="secCompose"></span>Compose</button>
+        <button class="nav-item" data-nav="board"><span class="ni-ico" data-i="secBoard"></span>Board</button>
+        <button class="nav-item" data-nav="calendar"><span class="ni-ico" data-i="secCalendar"></span>Calendar</button>
+        <button class="nav-item" data-nav="reviews"><span class="ni-ico" data-i="comment"></span>Reviews<span class="notif-badge nav-badge" id="checkReviewsBadge" hidden></span></button>
+      </nav>
+
+      <div class="side-tools" id="sideTools">
+        <button class="tool-btn" data-panel="images" style="--tc: 76 141 255">
+          <span class="tb-tile"><span class="tb-i" data-i="secImage"></span></span>
+          <span class="tb-txt"><b>Images</b><small>Upload &amp; crop</small></span>
+          <span class="tb-arrow" data-i="chevR"></span>
+        </button>
+        <button class="tool-btn" data-panel="caption" style="--tc: 158 114 232">
+          <span class="tb-tile"><span class="tb-i" data-i="secText"></span></span>
+          <span class="tb-txt"><b>Caption</b><small>Master &amp; per-placement</small></span>
+          <span class="tb-arrow" data-i="chevR"></span>
+        </button>
+        <button class="tool-btn" data-panel="hash" style="--tc: 232 91 145">
+          <span class="tb-tile"><span class="tb-i" data-i="secSparkle"></span></span>
+          <span class="tb-txt"><b>Hashtags</b><small>Sets &amp; first comment</small></span>
+          <span class="tb-arrow" data-i="chevR"></span>
+        </button>
+        <button class="tool-btn" data-panel="ai" style="--tc: 139 122 255">
+          <span class="tb-tile"><span class="tb-i" data-i="aiStars"></span></span>
+          <span class="tb-txt"><b>AI assist</b><small id="aiToolSub">Captions, alt text, ideas</small></span>
+          <span class="tb-arrow" data-i="chevR"></span>
+        </button>
+        <button class="tool-btn" data-panel="brand" style="--tc: 245 147 63">
+          <span class="tb-tile"><span class="tb-i" data-i="secUser"></span></span>
+          <span class="tb-txt"><b>Brand</b><small>Kits, avatar, recipients</small></span>
+          <span class="tb-arrow" data-i="chevR"></span>
+        </button>
+        <button class="tool-btn" data-panel="templates" style="--tc: 120 170 90">
+          <span class="tb-tile"><span class="tb-i" data-i="secLayers"></span></span>
+          <span class="tb-txt"><b>Templates</b><small>Save &amp; reuse a setup</small></span>
+          <span class="tb-arrow" data-i="chevR"></span>
+        </button>
+        <button class="tool-btn" data-panel="backup" style="--tc: 47 184 160">
+          <span class="tb-tile"><span class="tb-i" data-i="secShield"></span></span>
+          <span class="tb-txt"><b>Backup</b><small>Export &amp; restore</small></span>
+          <span class="tb-arrow" data-i="chevR"></span>
+        </button>
+      </div>
+
+      <div class="flyout" id="fly-images" hidden style="--tc: 76 141 255">
+        <div class="fly-head">
+          <span class="fly-ico" data-i="secImage"></span>
+          <span class="fly-title">Images</span>
+          <button class="fly-close" data-i="plus" aria-label="Close"></button>
+        </div>
+        <div class="fly-body">
+          <div id="dropzone" class="dropzone">
+            <span class="dz-ico" data-i="upload"></span>
+            <p class="dz-title">Drop images here</p>
+            <p class="dz-sub">click to choose · ⌘V to paste · add several for a carousel</p>
+            <input type="file" id="fileInput" accept="image/*" multiple hidden />
+          </div>
+          <div id="slideStrip" class="slide-strip" hidden></div>
+          <label class="field" id="altField" hidden>
+            <span>Alt text <small>· slide <b id="altSlideNum">1</b> · for screen readers</small></span>
+            <textarea id="altText" rows="2" spellcheck="true" placeholder="Describe this image for people who can't see it…"></textarea>
+            <div class="alt-ai">
+              <button id="altWrite" class="ai-inline-btn" type="button"><span class="aii-ico" data-i="aiStars"></span>Write alt text</button>
+              <button id="altWriteAll" class="ai-inline-btn ghost" type="button" hidden>Write for all slides</button>
+            </div>
+          </label>
+          <details id="cropDetails" class="disc" hidden open>
+            <summary>Crop &amp; fit</summary>
+            <div class="disc-body">
+              <p class="hint" id="focusHint">Drag the point to set the crop focus</p>
+              <div id="focusStage" class="focus-stage">
+                <img id="focusImg" alt="" />
+                <div id="focusDot" class="focus-dot"></div>
+              </div>
+              <label class="field">
+                <span>Fit</span>
+                <div class="select-pill">
+                  <select id="fitMode">
+                    <option value="cover">Cover (fill &amp; crop)</option>
+                    <option value="contain">Contain (letterbox)</option>
+                  </select>
+                </div>
+              </label>
+              <label class="field">
+                <span>Letterbox color</span>
+                <input type="color" id="padColor" value="#000000" />
+              </label>
+            </div>
+          </details>
+          <details id="fmtImagesPanel" class="disc" hidden open>
+            <summary>Format-specific images</summary>
+            <div class="disc-body">
+              <p class="hint">Upload a purpose-made graphic for one placement — it replaces the master image there and exports at that platform's size.</p>
+              <div id="fmtImageList"></div>
+            </div>
+          </details>
+          <input type="file" id="fmtFileInput" accept="image/*" multiple hidden />
+        </div>
+      </div>
+
+      <div class="flyout" id="fly-caption" hidden style="--tc: 158 114 232">
+        <div class="fly-head">
+          <span class="fly-ico" data-i="secText"></span>
+          <span class="fly-title">Caption</span>
+          <button class="fly-close" data-i="plus" aria-label="Close"></button>
+        </div>
+        <div class="fly-body">
+          <div class="select-pill cap-target">
+            <select id="captionTarget"></select>
+          </div>
+          <textarea id="caption" rows="6" spellcheck="true" placeholder="Write the caption the team will review…"></textarea>
+          <div class="caption-meta">
+            <span id="charCount">0 characters</span>
+            <button id="capReset" class="cap-reset" hidden>Reset to master</button>
+          </div>
+
+          <div class="ai-bar" id="capAiBar">
+            <div class="ai-bar-menu" data-menu="rewrite">
+              <button class="ai-chip" type="button" data-act="rewrite-menu"><span class="aii-ico" data-i="aiStars"></span>Rewrite<span class="ai-chip-caret" data-i="chevR"></span></button>
+              <div class="ai-pop" hidden>
+                <button data-tone="shorter">Shorter</button>
+                <button data-tone="warmer">Warmer</button>
+                <button data-tone="clearer and simpler">Plainer</button>
+                <button data-tone="punchier">Punchier</button>
+                <button data-tone="calmer, less hype">Less hype</button>
+              </div>
+            </div>
+            <button class="ai-chip" type="button" data-act="variants">3 variants</button>
+            <button class="ai-chip" type="button" data-act="hook">Fix the hook</button>
+            <button class="ai-chip" type="button" data-act="tone">Tone check</button>
+            <button class="ai-chip" type="button" data-act="repurpose">Per platform</button>
+            <div class="ai-bar-menu" data-menu="translate">
+              <button class="ai-chip" type="button" data-act="translate-menu">Translate<span class="ai-chip-caret" data-i="chevR"></span></button>
+              <div class="ai-pop" hidden>
+                <button data-lang="Spanish">Spanish</button>
+                <button data-lang="Haitian Creole">Haitian Creole</button>
+                <button data-lang="Portuguese">Portuguese</button>
+                <button data-lang="Korean">Korean</button>
+                <button data-lang="Vietnamese">Vietnamese</button>
+                <button data-lang="Tagalog">Tagalog</button>
+              </div>
+            </div>
+          </div>
+
+          <button id="capClearAll" class="cap-clear-all">Clear all captions</button>
+
+          <details id="capHealth" class="disc ai-health" open>
+            <summary>Caption health <span class="ai-health-score" id="capHealthScore"></span></summary>
+            <div class="disc-body" id="capHealthBody"></div>
+          </details>
+
+          <details id="cutoffDetails" class="disc" hidden>
+            <summary>Where it gets cut off</summary>
+            <div id="cutoffs" class="cutoffs disc-body"></div>
+          </details>
+        </div>
+      </div>
+
+      <div class="flyout" id="fly-hash" hidden style="--tc: 232 91 145">
+        <div class="fly-head">
+          <span class="fly-ico" data-i="secSparkle"></span>
+          <span class="fly-title">Hashtags &amp; first comment</span>
+          <button class="fly-close" data-i="plus" aria-label="Close"></button>
+        </div>
+        <div class="fly-body">
+          <label class="field">
+            <span>Hashtags <small>(appended to IG / TikTok / LinkedIn / FB)</small></span>
+            <textarea id="hashtags" rows="3" spellcheck="false" placeholder="#YourBrand #Sunday #Community"></textarea>
+          </label>
+          <button id="hashSave" class="btn btn-sm" style="margin-top:8px">＋ Save as preset…</button>
+          <div class="hash-sets" id="hashSets"></div>
+          <label class="field">
+            <span>First comment <small>(Instagram / LinkedIn)</small></span>
+            <textarea id="firstComment" rows="3" spellcheck="true" placeholder="Drop your hashtags or a link here…"></textarea>
+          </label>
+          <button id="hashSuggest" class="ai-inline-btn" type="button" style="margin-top:10px">
+            <span class="aii-ico" data-i="aiStars"></span>Suggest hashtags
+          </button>
+        </div>
+      </div>
+
+      <div class="flyout" id="fly-ai" hidden style="--tc: 139 122 255">
+        <div class="fly-head">
+          <span class="fly-ico" data-i="aiStars"></span>
+          <span class="fly-title">AI assist</span>
+          <button class="fly-close" data-i="plus" aria-label="Close"></button>
+        </div>
+        <div class="fly-body">
+          <div class="ai-conn" id="aiConn">
+            <div class="ai-conn-row">
+              <span class="ai-dot" id="aiDot"></span>
+              <div class="ai-conn-txt">
+                <b id="aiConnTitle">Turn on the writing tools — free</b>
+                <small id="aiConnSub">Runs through Google’s free Gemini tier. No credit card, about a minute, and one key covers the whole team.</small>
+              </div>
+            </div>
+
+            <div class="ai-key-steps" id="aiKeyForm">
+              <button class="btn btn-sm btn-primary ai-getkey" id="aiGetKey" type="button">
+                <span class="b-ico" data-i="globe"></span>Get a free key<span class="ai-getkey-ext">↗</span>
+              </button>
+              <p class="ai-step-note">Opens Google AI Studio → sign in → <b>Create API key</b> → copy it, then paste below.</p>
+              <div class="ai-conn-form" id="aiConnForm">
+                <input type="password" id="aiKeyInput" placeholder="Paste your key here" autocomplete="off" spellcheck="false" />
+                <button class="btn btn-sm btn-primary" id="aiKeySave">Save &amp; test</button>
+                <p class="field-note" id="aiKeyMsg">
+                  Stored encrypted on this Mac; requests go straight from this app to Google.
+                </p>
+              </div>
+            </div>
+            <div class="ai-key-ok" id="aiKeyOk" hidden>
+              <span>Key saved &amp; working.</span>
+              <button class="btn btn-sm" id="aiKeyClearBtn">Forget key</button>
+            </div>
+          </div>
+
+          <div class="ai-launchers">
+            <button class="ai-launch" id="aiSermon" type="button">
+              <span class="ai-launch-ico" data-i="wand"></span>
+              <span class="ai-launch-txt"><b>Sermon → post pack</b><small>Notes or a transcript become a week of posts</small></span>
+              <span class="ai-launch-arrow" data-i="chevR"></span>
+            </button>
+          </div>
+
+          <div class="ai-help">
+            <b>Where the tools live</b>
+            <ul>
+              <li>Caption panel — rewrite, variants, hook, tone check, repurpose, translate</li>
+              <li>Images panel — write alt text from the picture</li>
+              <li>Hashtags panel — suggest hashtags</li>
+              <li>Calendar day — turn review feedback into a punch list</li>
+            </ul>
+            <p class="field-note">Caption health (readability, scripture references, hooks, tone) always runs offline — no model needed.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="flyout" id="fly-brand" hidden style="--tc: 245 147 63">
+        <div class="fly-head">
+          <span class="fly-ico" data-i="secUser"></span>
+          <span class="fly-title">Brand</span>
+          <button class="fly-close" data-i="plus" aria-label="Close"></button>
+        </div>
+        <div class="fly-body">
+          <label class="field">
+            <span>Brand kit</span>
+            <div class="select-pill"><select id="brandPicker"></select></div>
+          </label>
+          <div class="brand-actions">
+            <button id="brandNew" class="btn btn-sm">＋ New</button>
+            <button id="brandDup" class="btn btn-sm">Duplicate</button>
+            <button id="brandDel" class="btn btn-sm">Delete</button>
+          </div>
+          <label class="field">
+            <span>Display name</span>
+            <input type="text" id="acctName" value="Your Brand" />
+          </label>
+          <label class="field">
+            <span>Handle / subtitle</span>
+            <input type="text" id="acctHandle" value="@yourbrand" />
+          </label>
+          <div class="dropzone dropzone-sm" id="avatarZone">
+            <p class="dz-sub">Avatar — click to choose</p>
+            <input type="file" id="avatarInput" accept="image/*" hidden />
+          </div>
+          <label class="field">
+            <span>Link preview URL <small>(FB / LinkedIn / X)</small></span>
+            <input type="text" id="linkUrl" placeholder="example.com" />
+          </label>
+          <label class="field">
+            <span>Feedback recipients <small>(comma-separated emails)</small></span>
+            <input type="text" id="feedbackEmail" placeholder="you@company.com, teammate@company.com" />
+            <small class="field-note">Used by the review file's email buttons.</small>
+          </label>
+        </div>
+      </div>
+
+      <div class="flyout" id="fly-templates" hidden style="--tc: 120 170 90">
+        <div class="fly-head">
+          <span class="fly-ico" data-i="secLayers"></span>
+          <span class="fly-title">Templates</span>
+          <button class="fly-close" data-i="plus" aria-label="Close"></button>
+        </div>
+        <div class="fly-body">
+          <p class="field-note" style="margin:0 0 10px">
+            A template stores the caption skeleton, hashtags, first comment, brand, placements,
+            ratios and fit — everything except the photo. Use <code>{{blank}}</code> markers in the
+            caption for parts you fill in each time.
+          </p>
+          <div class="tpl-save">
+            <input type="text" id="tplName" placeholder="Template name — e.g. Sunday recap" />
+            <button id="tplSave" class="btn btn-sm">Save current as template</button>
+          </div>
+          <div class="tpl-list" id="tplList"></div>
+        </div>
+      </div>
+
+      <div class="flyout" id="fly-backup" hidden style="--tc: 47 184 160">
+        <div class="fly-head">
+          <span class="fly-ico" data-i="secShield"></span>
+          <span class="fly-title">Backup</span>
+          <button class="fly-close" data-i="plus" aria-label="Close"></button>
+        </div>
+        <div class="fly-body">
+          <p class="field-note" style="margin:0 0 10px">Everything is stored on this Mac only. Keep a backup somewhere safe.</p>
+          <div class="brand-actions">
+            <button id="btnBackup" class="btn btn-sm">Export backup…</button>
+            <button id="btnRestore" class="btn btn-sm">Restore…</button>
+          </div>
+        </div>
+      </div>
+
+      <button class="side-account" id="sideAccount">
+        <span class="sa-av" id="sideAvatar">Y</span>
+        <span class="sa-meta">
+          <span class="sa-name" id="sideName">Your Brand</span>
+          <span class="sa-handle" id="sideHandle">@yourbrand</span>
+        </span>
+        <span class="sa-chev" data-i="chevR"></span>
+      </button>
+      <div class="side-resize" id="sideResize"></div>
+    </aside>
+
+    <main class="stage">
+      <header class="topbar">
+        <div class="tb-left">
+          <span class="tb-title" id="tbTitle">Compose</span>
+          <div class="view-switch" id="viewSwitch" hidden>
+            <button data-view="focus" class="on">Focus</button>
+            <button data-view="board">Board</button>
+          </div>
+          <button id="btnStartOver" class="btn btn-sm" hidden title="Clear the images, caption, and overrides so you can start a new post">Start over</button>
+          <div class="cal-nav" id="calNav" hidden>
+            <div class="view-switch" id="calViewSwitch">
+              <button data-cv="month" class="on">Month</button>
+              <button data-cv="week">Week</button>
+              <button data-cv="list">List</button>
+            </div>
+            <button id="calPrev" class="icon-btn" data-i="chevL"></button>
+            <span id="calTitle">Month</span>
+            <button id="calNext" class="icon-btn" data-i="chevR"></button>
+            <button id="calToday" class="btn btn-sm">Today</button>
+            <input type="text" id="calSearch" class="cal-search" placeholder="Search posts…" hidden />
+          </div>
+        </div>
+        <div class="tb-actions">
+          <div class="pv-toggles" id="pvToggles" hidden>
+            <div class="tb-group" title="What you're previewing on">
+              <div class="view-switch" id="deviceSwitch">
+                <button data-dv="mobile" class="on">Mobile</button>
+                <button data-dv="desktop">Desktop</button>
+              </div>
+              <button class="fc-tog" id="frameToggle" type="button" aria-pressed="true" title="Show the preview inside a phone / computer mock">
+                <span class="fct-ico" id="frameIco" data-i="devPhone"></span>Mock
+              </button>
+            </div>
+            <div class="tb-group" title="Viewing conditions &amp; overlays">
+              <div class="view-switch pv-theme" id="pvTheme">
+                <button data-pv="light" class="on">Light</button>
+                <button data-pv="dark">Dark</button>
+              </div>
+              <button class="fc-tog" id="feedContextToggle" type="button" aria-pressed="false">
+                <span class="fct-ico" data-i="secLayers"></span>In-feed
+              </button>
+              <button class="fc-tog" id="safeToggle" type="button" aria-pressed="false">
+                <span class="fct-ico" data-i="secShield"></span>Safe areas
+              </button>
+            </div>
+          </div>
+          <div class="tb-group tb-group-actions">
+            <button id="btnPlacements" class="btn">Social platform</button>
+            <button id="btnSave" class="btn" disabled><span class="b-ico" data-i="secSave"></span>Save</button>
+          </div>
+          <div class="tb-group tb-group-actions">
+            <button id="btnPublishReview" class="btn" disabled><span class="b-ico" data-i="comment"></span>In review</button>
+            <button id="btnExport" class="btn btn-primary" disabled>Export</button>
+          </div>
+        </div>
+      </header>
+
+      <div class="stage-body">
+        <div id="focusView" class="focus-view">
+          <div class="switcher-wrap">
+            <div id="switcher" class="switcher"></div>
+          </div>
+          <div class="focus-controls">
+            <span id="focusMeta"></span>
+          </div>
+          <div class="focus-area">
+            <button class="nav-btn" id="focusPrev" aria-label="Previous">‹</button>
+            <div id="focusPreview" class="focus-preview"></div>
+            <button class="nav-btn" id="focusNext" aria-label="Next">›</button>
+          </div>
+          <div id="focusEmpty" class="empty-hero">
+            <span class="eh-ico" data-i="secImage"></span>
+            <h1>Preview your post everywhere</h1>
+            <p>Drop in one or more images, write a caption, and see exactly how it lands
+               on every social placement — with each platform's real crop and cut-off.</p>
+            <div class="eh-actions">
+              <button id="heroChoose" class="btn btn-primary btn-lg"><span class="b-ico" data-i="upload"></span>Choose images</button>
+              <span class="eh-hint">or press ⌘V to paste</span>
+            </div>
+          </div>
+        </div>
+
+        <div id="boardView" class="board-scroll" hidden>
+          <div id="emptyState" class="empty-hero sm">
+            <span class="eh-ico" data-i="secBoard"></span>
+            <h1>No images yet</h1>
+            <p>Add images in the panel on the left, then export a board to send to the team.</p>
+          </div>
+          <div id="board" class="board"></div>
+        </div>
+
+        <div id="calendarView" class="calendar-view" hidden>
+          <div class="cal-grid-head" id="calDow"></div>
+          <div class="cal-grid" id="calGrid"></div>
+          <div class="cal-list" id="calList" hidden></div>
+          <div class="empty-hero cal-empty" id="calEmpty" hidden>
+            <span class="eh-ico" data-i="secCalendar"></span>
+            <h1>Your content calendar</h1>
+            <p>Save a preview from Compose and it lands on its date here, so you can look
+               back at what went out any day.</p>
+          </div>
+        </div>
+
+        <div id="reviewsView" class="reviews-view" hidden>
+          <div class="reviews-empty empty-hero cal-empty" id="reviewsEmpty" hidden>
+            <span class="eh-ico" data-i="comment"></span>
+            <h1>No review links yet</h1>
+            <p>Click "In review" on a post to publish it for feedback — it'll show up here
+               while people are commenting, then move to Completed once every placement is approved.</p>
+          </div>
+          <section class="reviews-section" id="reviewsInSection">
+            <h2>In review <span class="reviews-count" id="reviewsInCount"></span></h2>
+            <div class="cal-list" id="reviewsInList"></div>
+          </section>
+          <section class="reviews-section" id="reviewsDoneSection">
+            <h2>Completed <span class="reviews-count" id="reviewsDoneCount"></span></h2>
+            <div class="cal-list" id="reviewsDoneList"></div>
+          </section>
+          <section class="reviews-section" id="reviewsArchivedSection">
+            <h2>Archived <span class="reviews-count" id="reviewsArchivedCount"></span></h2>
+            <div class="cal-list" id="reviewsArchivedList"></div>
+          </section>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <div id="placementsPop" class="pop" hidden>
+    <div class="pop-head">Show these social platforms</div>
+    <div id="platformToggles" class="toggles"></div>
+  </div>
+
+  <div id="exportMenu" class="pop menu" hidden>
+    <button data-exp="ready">Ready pack — folder for the team</button>
+    <button data-exp="pngs">Mockup PNGs — one per placement</button>
+    <button data-exp="board-png">Board — single PNG</button>
+    <button data-exp="board-pdf">Board — single PDF</button>
+    <div class="menu-sep"></div>
+    <button data-exp="scheduler">Send to scheduler — CSV + calendar (.ics)</button>
+  </div>
+
+  <div id="modalWrap" class="modal-wrap" hidden>
+    <div class="modal" id="saveModal">
+      <h2>Save this post</h2>
+      <label class="field"><span>Title</span><input type="text" id="saveTitle" placeholder="e.g. Fall collection launch" /></label>
+      <label class="field"><span>Date</span><input type="date" id="saveDate" /></label>
+      <div class="modal-actions">
+        <button class="btn" id="saveCancel">Cancel</button>
+        <button class="btn" id="saveAsNew" hidden>Save as new</button>
+        <button class="btn btn-primary" id="saveConfirm">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="packWrap" class="modal-wrap" hidden>
+    <div class="modal" id="packModal">
+      <h2>Name the ready pack</h2>
+      <label class="field"><span>Folder name</span><input type="text" id="packTitle" placeholder="e.g. Vision Sunday — week 1" /></label>
+      <small class="field-note">Each placement gets a sub-folder with its image at that platform's exact size, caption, hashtags and alt text.</small>
+      <div class="modal-actions">
+        <button class="btn" id="packCancel">Cancel</button>
+        <button class="btn btn-primary" id="packConfirm">Export</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="dayPanel" class="day-panel" hidden>
+    <div class="dp-head"><span id="dpDate">Day</span><button class="icon-btn" id="dpClose" data-i="chevR"></button></div>
+    <div id="dpList" class="dp-list"></div>
+    <button class="btn btn-primary dp-new" id="dpNew"><span class="b-ico" data-i="plusCircle"></span>New post this day</button>
+  </div>
+
+  <!-- AI result panel (right-docked) -->
+  <div id="aiSheet" class="ai-sheet" hidden>
+    <div class="ai-sheet-head">
+      <span class="ai-sheet-ico" data-i="aiStars"></span>
+      <span class="ai-sheet-title" id="aiSheetTitle">AI</span>
+      <button class="icon-btn" id="aiSheetClose" data-i="chevR" aria-label="Close"></button>
+    </div>
+    <div class="ai-sheet-body" id="aiSheetBody"></div>
+    <div class="ai-sheet-foot" id="aiSheetFoot" hidden>
+      <button class="btn btn-sm" id="aiSheetRegen"><span class="b-ico" data-i="refresh"></span>Try again</button>
+    </div>
+  </div>
+
+  <!-- Sermon → post pack -->
+  <div id="sermonWrap" class="modal-wrap" hidden>
+    <div class="modal ai-modal" id="sermonModal">
+      <div class="ai-modal-head">
+        <span class="ai-modal-ico" data-i="wand"></span>
+        <h2>Sermon → post pack</h2>
+        <button class="icon-btn" id="sermonClose" data-i="chevR" aria-label="Close"></button>
+      </div>
+      <div class="ai-modal-body" id="sermonBody">
+        <p class="field-note">Paste sermon notes, a rough transcript, or the main points. The AI drafts a series name, key verses, pull-quotes and a week of posts you can drop onto the calendar.</p>
+        <textarea id="sermonSrc" rows="9" spellcheck="true" placeholder="Paste the sermon notes or transcript here…"></textarea>
+        <div class="sermon-opts">
+          <label class="field"><span>How many posts</span>
+            <div class="select-pill"><select id="sermonCount">
+              <option value="3">3</option><option value="5" selected>5</option><option value="7">7</option>
+            </select></div>
+          </label>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" id="sermonCancel">Cancel</button>
+        <button class="btn btn-primary" id="sermonGo"><span class="b-ico" data-i="wand"></span>Generate</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <div id="overlay" class="overlay">
+    <div class="spinner"></div>
+    <div class="ov-text" id="overlayText">Rendering…</div>
+  </div>
+
+  <script src="../vendor/html-to-image.js"></script>
+  <script src="../vendor/jspdf.umd.min.js"></script>
+  <script src="platforms.js"></script>
+  <script src="icons.js"></script>
+  <script src="scripture-data.js"></script>
+  <script src="ai.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

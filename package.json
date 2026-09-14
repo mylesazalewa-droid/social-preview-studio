@@ -1,0 +1,52 @@
+{
+  "name": "social-preview-studio",
+  "version": "1.0.0",
+  "description": "Preview images across social platforms and export mockups",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --mac",
+    "dist:dir": "electron-builder --mac dir"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "electron": "^44.2.0",
+    "electron-builder": "^26.15.3"
+  },
+  "dependencies": {
+    "html-to-image": "^1.11.13",
+    "jspdf": "^4.2.1"
+  },
+  "build": {
+    "appId": "com.team.socialpreviewstudio",
+    "productName": "Social Preview Studio",
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*",
+      "vendor/**/*",
+      "build/icon.png"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "mac": {
+      "target": [
+        { "target": "dmg", "arch": ["arm64"] }
+      ],
+      "icon": "build/icon.icns",
+      "category": "public.app-category.graphics-design",
+      "identity": null
+    },
+    "dmg": {
+      "title": "Social Preview Studio",
+      "contents": [
+        { "x": 140, "y": 200, "type": "file" },
+        { "x": 400, "y": 200, "type": "link", "path": "/Applications" }
+      ]
+    }
+  }
+}
