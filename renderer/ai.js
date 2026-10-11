@@ -410,6 +410,21 @@ Make ${count || 5} posts, varied across Instagram feed, Story, Facebook and X. K
       parts: `Rewrite so a first-time visitor with no church background understands it. Replace or briefly explain insider terms${terms && terms.length ? ` (found: ${terms.join(', ')})` : ''}. Keep all facts. Return only the caption.\n\n---\n${text}`,
       temperature: 0.5,
     }),
+    videoMoments: ({ mime, data, durationSec }) => ({
+      system: `You find the most compelling, self-contained moments in a sermon or event recording for a short vertical social clip (like Opus Clip). You listen for hooks, punchy one-liners, stories with a clear beginning and end, and emotional or surprising beats — never a sentence cut off mid-thought.`,
+      json: true,
+      parts: [
+        { text: `This audio runs about ${Math.round(durationSec || 0)} seconds. Find up to 12 candidate moments, each a continuous span of ${Math.round(durationSec || 0) > 120 ? '8-45' : '5-25'} seconds that stands alone without needing earlier context. Prefer moments that could open OR close a short clip. Timestamps are from the very start of this audio (0:00), as "m:ss".
+
+Return JSON:
+{"segments":[{"start":"m:ss","end":"m:ss","transcript":"what's said, verbatim","why":"one short phrase — the hook, the story, the punchline","score":1-10}]}
+
+Order by score, highest first.` },
+        { inlineData: { mimeType: mime, data } },
+      ],
+      temperature: 0.4,
+      timeoutMs: 180000, // a long recording takes Google noticeably longer to listen through
+    }),
   };
 
   // Never let a network call hang forever.
@@ -428,7 +443,7 @@ Make ${count || 5} posts, varied across Instagram feed, Story, Facebook and X. K
     const r = await withTimeout(window.api.ai.gemini({
       parts: spec.parts, system: spec.system,
       json: !!spec.json, temperature: spec.temperature,
-    }), 45000, 'Google took too long to respond — try again.');
+    }), spec.timeoutMs || 45000, 'Google took too long to respond — try again.');
     if (!r.ok) {
       if (r.error === 'no-key') throw new AIError('no-backend');
       throw new AIError('gemini', r.error);
@@ -476,7 +491,7 @@ Make ${count || 5} posts, varied across Instagram feed, Story, Facebook and X. K
     if (e.kind === 'download') return 'Open the AI panel and turn on the model first.';
     if (e.kind === 'no-ondevice' || e.kind === 'no-backend')
       return 'Add a free Google Gemini key in the AI panel to use the writing tools — it takes about a minute and needs no credit card.';
-    if (e.kind === 'no-vision') return 'Reading images needs a free Google Gemini key — add one in the AI panel.';
+    if (e.kind === 'no-vision') return 'Reading images or audio needs a free Google Gemini key — add one in the AI panel.';
     if (e.kind === 'timeout') return e.message || 'The AI took too long — try again.';
     if (e.kind === 'bad-json') return 'The model returned something unexpected — try again.';
     if (e.kind === 'gemini') return e.message || 'The AI request failed.';

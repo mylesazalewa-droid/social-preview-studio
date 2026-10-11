@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('api', {
   openText: (payload) => ipcRenderer.invoke('open-text', payload),
   openLink: (name) => ipcRenderer.invoke('open-link', { name }),
   openUrl: (url) => ipcRenderer.invoke('open-url', { url }),
+  revealFile: (path) => ipcRenderer.invoke('reveal-file', { path }),
   publishPost: (payload) => ipcRenderer.invoke('publish-post', payload),
   fetchComments: (id) => ipcRenderer.invoke('fetch-comments', { id }),
   ai: {
@@ -16,5 +17,11 @@ contextBridge.exposeInMainWorld('api', {
     keySet: (key) => ipcRenderer.invoke('ai-key-set', { key }),
     keyClear: () => ipcRenderer.invoke('ai-key-clear'),
     gemini: (payload) => ipcRenderer.invoke('ai-gemini', payload),
+  },
+  video: {
+    pick: () => ipcRenderer.invoke('video-pick'),
+    extractAudio: (path) => ipcRenderer.invoke('video-extract-audio', { path }),
+    extractFrame: (path, atSec) => ipcRenderer.invoke('video-extract-frame', { path, atSec }),
+    renderClip: (path, segments) => ipcRenderer.invoke('video-render-clip', { path, segments }),
   },
 });

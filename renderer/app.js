@@ -51,6 +51,7 @@
     trash: [],
     recent: [],       // recent image data URLs
     editingId: null,
+    pendingTitle: '', // custom project name set before the post has been saved yet
     calMonth: (() => { const d = new Date(); d.setDate(1); return d; })(),
     expanded: new Set(), // platform ids whose caption is expanded via "more"
     enabled: new Set(PLATFORMS.map((p) => p.id)),
@@ -63,6 +64,16 @@
     templates: [], // [{ id, name, createdAt, snap }] — reusable post setups (no photo)
     sidebarW: 300,
     undo: [], redo: [],
+    compareItems: [], // Compare tool: [{ id, img }] — any number of candidate images
+    comparePlatform: 'ig-feed', // which platform mock previews them
+    compareCaption: '', compareHashtags: '', // independent of the main post's caption/hashtags
+    // Auto Clip tool: never saved to a post — a video lives on disk and is
+    // only ever referenced by path (see main.js's video-* handlers).
+    autoClip: {
+      path: '', name: '', duration: 0,
+      status: 'idle', // 'idle' | 'extracting' | 'analyzing' | 'ready' | 'rendering'
+      segments: [], // [{ id, start, end, transcript, why, score, selected, thumb }]
+    },
   };
   let dragFrom = null;
 
@@ -852,10 +863,16 @@
     const fico = $('#frameIco');
     if (fico) fico.innerHTML = state.device === 'desktop' ? ICONS.devMonitor : ICONS.devPhone;
 
-    $('#focusView').hidden = state.view !== 'focus';
-    $('#boardView').hidden = state.view !== 'board';
+    // The Compare tool takes over the whole stage (it's not a platform preview)
+    // while its flyout is the one open, regardless of the Focus/Board tab.
+    const compareActive = compose && activeFlyout === 'compare';
+    $('#focusView').hidden = state.view !== 'focus' || compareActive;
+    $('#boardView').hidden = state.view !== 'board' || compareActive;
+    $('#compareStage').hidden = !compareActive;
+    if (compareActive) renderCompareStage();
     $('#calendarView').hidden = state.view !== 'calendar';
     $('#reviewsView').hidden = state.view !== 'reviews';
+    $('#autoClipView').hidden = state.view !== 'autoclip';
     $('#sideTools').hidden = !compose;
     if (!compose) closeFlyout();
     $('#viewSwitch').hidden = !compose;
@@ -870,19 +887,25 @@
       const active = b.dataset.nav === 'calendar' ? state.view === 'calendar'
         : b.dataset.nav === 'board' ? state.view === 'board'
         : b.dataset.nav === 'reviews' ? state.view === 'reviews'
+        : b.dataset.nav === 'autoclip' ? state.view === 'autoclip'
         : state.view === 'focus';
       b.classList.toggle('on', active);
     });
     $('#tbTitle').textContent = state.view === 'calendar' ? 'Calendar'
       : state.view === 'reviews' ? 'Reviews'
-      : state.editingId ? (postById(state.editingId)?.title || 'Compose') : 'Compose';
+      : state.view === 'autoclip' ? 'Auto Clip'
+      : state.editingId ? (postById(state.editingId)?.title || 'Compose')
+      : (state.pendingTitle || 'Compose');
 
     if (state.view === 'calendar') renderCalendar();
     else if (state.view === 'reviews') renderReviews();
+    else if (state.view === 'autoclip') renderAutoClip();
     else if (state.view === 'board') renderBoard(list, has);
     else renderFocus(list, has);
 
     $('#btnPublishReview').disabled = !ready || !compose;
+    const editingPost = state.editingId && postById(state.editingId);
+    $('#btnPublishReview').lastChild.textContent = (editingPost && editingPost.reviewId) ? 'Update review' : 'In review';
     $('#btnExport').disabled = !ready || !compose;
     $('#btnSave').disabled = !has || !compose;
 
@@ -1204,6 +1227,7 @@
     if (b) b.classList.add('active');
     activeFlyout = name;
     document.body.classList.add('flyout-open');
+    if (name === 'compare') renderCompare();
   }
   function initToolPanels() {
     $('#sideTools').addEventListener('click', (e) => {
@@ -1212,11 +1236,12 @@
       const name = b.dataset.panel;
       if (activeFlyout === name) closeFlyout();
       else openFlyout(name);
+      render();
     });
     document.querySelectorAll('.fly-close').forEach((c) =>
-      c.addEventListener('click', closeFlyout));
+      c.addEventListener('click', () => { closeFlyout(); render(); }));
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && activeFlyout) closeFlyout();
+      if (e.key === 'Escape' && activeFlyout) { closeFlyout(); render(); }
     });
   }
   function syncCaptionEditor() {
@@ -1535,6 +1560,218 @@
     });
   }
 
+  /* ---------- compare tool: any number of candidate images ---------- */
+  const COMPARE_MAX = 6;
+  let pendingCompareId = null;
+  function compareLabel(i) { return 'Option ' + String.fromCharCode(65 + i); }
+  function ensureCompareMinSlots() {
+    while (state.compareItems.length < 2) state.compareItems.push({ id: uid('cmp'), img: null });
+  }
+  function loadCompareFile(itemId, file) {
+    if (!file || !file.type || !file.type.startsWith('image/')) return;
+    const fr = new FileReader();
+    fr.onload = async () => {
+      const item = state.compareItems.find((x) => x.id === itemId);
+      if (!item) return;
+      item.img = await normalizeImage(fr.result);
+      renderCompare();
+    };
+    fr.readAsDataURL(file);
+  }
+
+  // Renders each candidate through the SAME mock builder Focus/Board use —
+  // buildCardInner(platform) — by swapping state.slides (and the caption/
+  // hashtags fields it reads) to this candidate's own values, so a Compare
+  // caption never touches the real post's caption. Bypasses buildCard()'s own
+  // per-placement override swap since we're already fully controlling state here.
+  function renderCompareStage() {
+    const wrap = $('#compareStage');
+    wrap.innerHTML = '';
+    const filled = state.compareItems
+      .map((item, i) => ({ item, i }))
+      .filter(({ item }) => item.img);
+    if (!filled.length) {
+      wrap.appendChild(el('p', 'compare-stage-empty', 'Upload images in the Compare panel to preview them here.'));
+      return;
+    }
+    const platform = PLATFORMS.find((p) => p.id === state.comparePlatform) || PLATFORMS[0];
+    const saved = {
+      slides: state.slides, active: state.active, caption: state.caption,
+      hashtags: state.hashtags, captionOverride: state.captionOverride, firstComment: state.firstComment,
+    };
+    state.caption = state.compareCaption;
+    state.hashtags = state.compareHashtags;
+    state.captionOverride = {};
+    state.firstComment = '';
+    filled.forEach(({ item, i }) => {
+      const col = el('div', 'compare-stage-col');
+      col.appendChild(el('div', 'compare-stage-label', compareLabel(i)));
+      state.slides = [{ src: item.img, type: 'image', focal: { x: 50, y: 50 }, alt: '' }];
+      state.active = 0;
+      col.appendChild(buildCardInner(platform));
+      wrap.appendChild(col);
+    });
+    Object.assign(state, saved);
+  }
+
+  function renderCompare() {
+    ensureCompareMinSlots();
+    if (document.activeElement !== $('#compareCaption')) $('#compareCaption').value = state.compareCaption;
+    if (document.activeElement !== $('#compareHashtags')) $('#compareHashtags').value = state.compareHashtags;
+    const list = $('#compareList');
+    list.innerHTML = '';
+    state.compareItems.forEach((item, i) => {
+      const slot = el('div', 'compare-slot');
+      if (item.img) {
+        const preview = el('div', 'compare-preview');
+        const img = el('img'); img.src = item.img; img.alt = compareLabel(i);
+        preview.appendChild(img);
+        preview.appendChild(el('span', 'compare-label-badge', String.fromCharCode(65 + i)));
+        const rm = el('button', 'compare-remove', '✕');
+        rm.type = 'button'; rm.title = 'Remove ' + compareLabel(i);
+        rm.addEventListener('click', () => {
+          if (state.compareItems.length <= 2) item.img = null;
+          else state.compareItems.splice(i, 1);
+          renderCompare();
+        });
+        preview.appendChild(rm);
+        slot.appendChild(preview);
+      } else {
+        const drop = el('div', 'compare-drop');
+        drop.innerHTML = `<span class="dz-ico">${ICONS.upload}</span><p class="dz-title">${compareLabel(i)}</p><p class="dz-sub">click or drop</p>`;
+        drop.addEventListener('click', () => { pendingCompareId = item.id; $('#compareFileInput').click(); });
+        ['dragover', 'dragenter'].forEach((ev) =>
+          drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('drag'); }));
+        ['dragleave', 'drop'].forEach((ev) =>
+          drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove('drag'); }));
+        drop.addEventListener('drop', (e) => loadCompareFile(item.id, e.dataTransfer.files[0]));
+        slot.appendChild(drop);
+      }
+      list.appendChild(slot);
+    });
+    $('#compareAddBtn').hidden = state.compareItems.length >= COMPARE_MAX;
+    const filledCount = state.compareItems.filter((it) => it.img).length;
+    $('#compareSendReview').disabled = filledCount < 2;
+    $('#compareExportPng').disabled = filledCount < 1;
+    $('#compareExportPdf').disabled = filledCount < 1;
+    renderCompareStage();
+  }
+
+  function initCompare() {
+    const sel = $('#comparePlatformSelect');
+    sel.innerHTML = PLATFORMS.map((p) => `<option value="${p.id}">${escapeHtml(platformName(p))}</option>`).join('');
+    sel.value = state.comparePlatform;
+    sel.addEventListener('change', (e) => {
+      state.comparePlatform = e.target.value;
+      renderCompareStage();
+    });
+    $('#compareCaption').addEventListener('input', (e) => {
+      state.compareCaption = e.target.value;
+      renderCompareStage();
+    });
+    $('#compareHashtags').addEventListener('input', (e) => {
+      state.compareHashtags = e.target.value;
+      renderCompareStage();
+    });
+    $('#compareFileInput').addEventListener('change', (e) => {
+      if (pendingCompareId) loadCompareFile(pendingCompareId, e.target.files[0]);
+      e.target.value = ''; pendingCompareId = null;
+    });
+    $('#compareAddBtn').addEventListener('click', () => {
+      if (state.compareItems.length >= COMPARE_MAX) return;
+      state.compareItems.push({ id: uid('cmp'), img: null });
+      renderCompare();
+    });
+    $('#compareExportPng').addEventListener('click', () => {
+      exportComparePng().catch((err) => toast('Error: ' + err.message));
+    });
+    $('#compareExportPdf').addEventListener('click', () => {
+      exportComparePdf().catch((err) => toast('Error: ' + err.message));
+    });
+    $('#compareSendReview').addEventListener('click', () => {
+      publishCompareReview().catch((err) => toast('Error: ' + err.message));
+    });
+  }
+
+  // Compresses a data URL for network upload only — the in-app copy (used for
+  // the live mock preview) keeps normalizeImage's higher-quality version, so
+  // this only shrinks what actually goes over the wire to the review backend.
+  function compressForUpload(dataUrl) {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const MAX = 1600;
+        const long = Math.max(img.width, img.height);
+        const s = long > MAX ? MAX / long : 1;
+        const c = document.createElement('canvas');
+        c.width = Math.round(img.width * s);
+        c.height = Math.round(img.height * s);
+        const ctx = c.getContext('2d');
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, 0, 0, c.width, c.height);
+        try { resolve(c.toDataURL('image/jpeg', 0.78)); }
+        catch (e) { resolve(dataUrl); }
+      };
+      img.onerror = () => resolve(dataUrl);
+      img.src = dataUrl;
+    });
+  }
+
+  // 'png' is used for the lossless Save-PNG button; 'jpeg' (smaller, lossy) is
+  // used for the PDF — a PDF here is meant to be emailed or printed, and a
+  // pixelRatio-2 PNG of several mock cards balloons to tens of MB, too big to
+  // mail — so the PDF path trades a little quality for a file worth sending.
+  async function compareStageImage(format) {
+    // NOT rebuilt here on purpose: every action that changes what the stage
+    // shows (image add/remove, caption/hashtags edit, platform switch) already
+    // calls renderCompareStage(), so the stage is already current by the time
+    // an (enabled) export button can be clicked. Rebuilding right before the
+    // capture raced html-to-image — freshly-inserted <img> nodes weren't
+    // painted yet even after a decode() + single rAF, producing a capture
+    // with only the text labels and no card content.
+    const stage = $('#compareStage');
+    await Promise.all([...stage.querySelectorAll('img')].map((im) =>
+      (im.decode ? im.decode().catch(() => {}) : Promise.resolve())));
+    const capture = format === 'jpeg'
+      ? window.htmlToImage.toJpeg(stage, { pixelRatio: 1.5, quality: 0.9, backgroundColor: '#0b0b0c', style: { padding: '28px' } })
+      : window.htmlToImage.toPng(stage, { pixelRatio: 2, backgroundColor: '#0b0b0c', style: { padding: '28px' } });
+    return await withTimeout(capture, 60000, 'comparison render');
+  }
+
+  async function exportComparePng() {
+    let url;
+    overlay(true, 'Rendering comparison…');
+    try { url = await compareStageImage('png'); } finally { overlay(false); }
+    const r = await window.api.saveFile({
+      defaultName: 'image-comparison.png',
+      dataUrl: url,
+      filters: [{ name: 'PNG', extensions: ['png'] }],
+    });
+    if (r.ok) toast('Saved → ' + r.path);
+  }
+
+  async function exportComparePdf() {
+    let url;
+    overlay(true, 'Building PDF…');
+    try { url = await compareStageImage('jpeg'); } finally { overlay(false); }
+    const img = new Image();
+    await new Promise((res) => { img.onload = res; img.src = url; });
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({
+      orientation: img.width >= img.height ? 'landscape' : 'portrait',
+      unit: 'pt',
+      format: [img.width / 2, img.height / 2],
+    });
+    pdf.addImage(url, 'JPEG', 0, 0, img.width / 2, img.height / 2);
+    const out = pdf.output('datauristring');
+    const r = await window.api.saveFile({
+      defaultName: 'image-comparison.pdf',
+      dataUrl: out,
+      filters: [{ name: 'PDF', extensions: ['pdf'] }],
+    });
+    if (r.ok) toast('PDF saved → ' + r.path);
+  }
+
   function initInputs() {
     $('#caption').addEventListener('input', (e) => {
       const v = e.target.value;
@@ -1679,11 +1916,23 @@
     await Promise.all([...node.querySelectorAll('img')].map((im) =>
       (im.decode ? im.decode().catch(() => {}) : Promise.resolve())));
     // no cacheBust — all images are fresh data: URIs; cacheBust can corrupt those.
-    if (opts && opts.light) {
-      // Smaller JPEGs for the hosted review link — keeps the upload well under
-      // the backend's request-size limit even with many placements.
+    if (opts && opts.hi) {
+      // Sharper JPEG for the review page's "view full size" zoom, so small
+      // baked-in text is legible — still compressed to keep the combined
+      // upload under the backend's request-size limit.
       return withTimeout(
-        window.htmlToImage.toJpeg(node, { pixelRatio: 1.25, quality: 0.82, backgroundColor: '#ffffff' }),
+        window.htmlToImage.toJpeg(node, { pixelRatio: 2, quality: 0.92, backgroundColor: '#ffffff' }),
+        45000, 'capture');
+    }
+    if (opts && opts.light) {
+      // Compressed JPEGs for the hosted review link — a "hi" companion image
+      // is uploaded alongside each card for the zoom button, so this only
+      // needs to be sharp enough to read at its displayed thumbnail size,
+      // not full detail. 1.25x was too soft for the small caption/hashtag
+      // text baked into the image; 1.75x keeps it legible without meaningfully
+      // growing the upload past what the "hi" image already costs.
+      return withTimeout(
+        window.htmlToImage.toJpeg(node, { pixelRatio: 1.75, quality: 0.85, backgroundColor: '#ffffff' }),
         45000, 'capture');
     }
     return withTimeout(
@@ -1745,6 +1994,12 @@
     }
   }
 
+  // Capturing the whole multi-card #board in one htmlToImage pass hangs
+  // indefinitely on real boards (several placements × full-resolution
+  // photos) — html-to-image never resolves or rejects, even past its own
+  // timeout, so the export just spins forever. Each card is captured
+  // individually instead, via the same snapshot() path per-card exports and
+  // review links already rely on, then composited onto one canvas here.
   async function boardImage() {
     document.body.classList.add('exporting');
     const wasSafe = state.safe;
@@ -1752,14 +2007,62 @@
     renderBoardOnly();
     await raf();
     try {
-      const bd = $('#board');
-      await Promise.all([...bd.querySelectorAll('img')].map((im) =>
-        (im.decode ? im.decode().catch(() => {}) : Promise.resolve())));
-      return await withTimeout(window.htmlToImage.toPng(bd, {
-        pixelRatio: 2,
-        backgroundColor: '#0b0b0c',
-        style: { padding: '28px' },
-      }), 60000, 'board render');
+      const groups = groupByPlatform(enabledList());
+      const SCALE = 2; // matches snapshot()'s default pixelRatio
+      const PAD = 28 * SCALE;
+      const GAP = 30 * SCALE;
+      const LABEL_H = 34 * SCALE;
+
+      const rows = groups.map(({ name, items }) => {
+        const cards = items.map((p) => {
+          const node = captureFor(p.id);
+          if (!node) return null;
+          const rect = node.getBoundingClientRect();
+          return { p, node, w: Math.round(rect.width * SCALE), h: Math.round(rect.height * SCALE) };
+        }).filter(Boolean);
+        const rowW = cards.reduce((s, c) => s + c.w, 0) + GAP * Math.max(0, cards.length - 1);
+        const rowH = cards.reduce((m, c) => Math.max(m, c.h), 0);
+        return { name, count: items.length, cards, rowW, rowH };
+      }).filter((r) => r.cards.length);
+      if (!rows.length) throw new Error('Nothing to export — add an image first');
+
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, PAD * 2 + Math.max(...rows.map((r) => r.rowW)));
+      canvas.height = Math.max(1, PAD * 2 + rows.reduce((s, r) => s + LABEL_H + r.rowH, 0) + GAP * Math.max(0, rows.length - 1));
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#0b0b0c';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#ececed';
+      ctx.textBaseline = 'top';
+      ctx.font = `650 ${13 * SCALE}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+
+      let y = PAD;
+      for (const row of rows) {
+        overlay(true, `Rendering ${row.name}…`);
+        ctx.fillText(`${row.name}   ${row.count}`, PAD, y + (LABEL_H - 13 * SCALE) / 2);
+        y += LABEL_H;
+        let x = PAD;
+        for (const card of row.cards) {
+          // hi (JPEG) rather than the PNG default — smaller per-card
+          // payloads add up fast once several placements are captured back
+          // to back for one board image.
+          const url = await withTimeout(snapshot(card.node, { hi: true }), 45000, `${row.name} card render`);
+          await new Promise((resolve, reject) => {
+            const img = new Image();
+            img.onload = () => {
+              ctx.drawImage(img, x, y, card.w, card.h);
+              img.onload = img.onerror = null;
+              img.src = '';
+              resolve();
+            };
+            img.onerror = () => { img.onload = img.onerror = null; reject(new Error('Could not render a placement image')); };
+            img.src = url;
+          });
+          x += card.w + GAP;
+        }
+        y += row.rowH + GAP;
+      }
+      return canvas.toDataURL('image/png');
     } finally {
       if (wasSafe) state.safe = true;
       document.body.classList.remove('exporting');
@@ -1791,7 +2094,19 @@
       unit: 'pt',
       format: [img.width / 2, img.height / 2],
     });
-    pdf.addImage(url, 'PNG', 0, 0, img.width / 2, img.height / 2);
+    // exportComparePdf() (below) already learned this lesson: jsPDF's PNG
+    // path decodes and re-processes raw pixel data, while its JPEG path just
+    // embeds the already-compressed bytes — cheaper for a multi-megabyte
+    // board image, so it's re-encoded as JPEG here before handing it to jsPDF.
+    const jpegCanvas = document.createElement('canvas');
+    jpegCanvas.width = img.width;
+    jpegCanvas.height = img.height;
+    const jctx = jpegCanvas.getContext('2d');
+    jctx.fillStyle = '#0b0b0c';
+    jctx.fillRect(0, 0, jpegCanvas.width, jpegCanvas.height);
+    jctx.drawImage(img, 0, 0);
+    const jpegUrl = jpegCanvas.toDataURL('image/jpeg', 0.9);
+    pdf.addImage(jpegUrl, 'JPEG', 0, 0, img.width / 2, img.height / 2);
     const out = pdf.output('datauristring');
     const r = await window.api.saveFile({
       defaultName: 'social-preview-board.pdf',
@@ -2048,29 +2363,69 @@
     // editing aid only — never bake it into what a reviewer sees.
     const wasSafe = state.safe;
     if (wasSafe) state.safe = false;
+    const savedActive = state.active;
+    const nSlides = state.slides.length;
     const cards = [];
     try {
-      renderBoardOnly();
-      await raf();
       for (const p of list) {
-        overlay(true, `${p.name} ${p.placement}…`);
-        const url = await snapshot(captureFor(p.id), { light });
         const src = slidesFor(p.id);
         const n = src.length;
         let caro = hasImageOverride(p.id) ? 'format-specific image' : '';
         if (p.slides && p.slides !== 'single' && n > 1) {
           caro = p.slides === 'swipe'
-            ? `carousel · ${n} slides (slide ${Math.min(state.active, n - 1) + 1} shown)`
+            ? `carousel · ${n} slides`
             : `${Math.min(n, p.maxSlides || 4)} of ${n} images shown`;
         }
-        const shownSlide = src[Math.min(state.active, n - 1)] || src[0];
+
+        // Reviewers used to only ever see whichever slide happened to be
+        // active when publishing, with no way to flip through the rest of
+        // the carousel — capture every slide (capped, to keep the upload
+        // bounded) so the review page can offer a real slider.
+        const isCarousel = p.slides === 'swipe' && nSlides > 1 && !hasImageOverride(p.id);
+        let url, hi, imgs;
+        if (isCarousel) {
+          const cap = Math.min(nSlides, 8);
+          imgs = [];
+          for (let i = 0; i < cap; i++) {
+            state.active = i;
+            overlay(true, `${p.name} ${p.placement} — slide ${i + 1}/${cap}…`);
+            renderBoardOnly();
+            await raf();
+            imgs.push(await snapshot(captureFor(p.id), { light }));
+          }
+          const shownIdx = Math.min(savedActive, cap - 1);
+          url = imgs[shownIdx];
+          hi = '';
+          if (light) {
+            state.active = shownIdx;
+            renderBoardOnly();
+            await raf();
+            try { hi = await snapshot(captureFor(p.id), { hi: true }); }
+            catch (e) { hi = ''; }
+          }
+        } else {
+          state.active = savedActive;
+          overlay(true, `${p.name} ${p.placement}…`);
+          renderBoardOnly();
+          await raf();
+          url = await snapshot(captureFor(p.id), { light });
+          hi = '';
+          if (light) {
+            try { hi = await snapshot(captureFor(p.id), { hi: true }); }
+            catch (e) { hi = ''; } // zoom just falls back to the regular image
+          }
+        }
+
+        const shownSlide = src[Math.min(savedActive, n - 1)] || src[0];
         cards.push({
-          name: `${p.name} · ${p.placement}`, accent: p.accent, img: url, caro,
+          name: `${p.name} · ${p.placement}`, platform: p.id, accent: p.accent, img: url, hi, caro,
+          imgs: imgs && imgs.length > 1 ? imgs : undefined,
           customCap: hasOverride(p.id) ? capFor(p.id) : '',
           alt: (shownSlide && shownSlide.alt || '').trim(),
         });
       }
     } finally {
+      state.active = savedActive;
       if (wasSafe) state.safe = true;
       document.body.classList.remove('exporting');
       render();
@@ -2091,58 +2446,107 @@
     if (!state.editingId || !postById(state.editingId)) {
       const thumb = await makeThumb();
       const id = uid('p');
-      const title = state.caption.trim().split('\n')[0].slice(0, 60) || 'Untitled post';
+      const title = state.pendingTitle.trim()
+        || state.caption.trim().split('\n')[0].slice(0, 60) || 'Untitled post';
       state.posts.push({
         id, title, date: targetDate || todayISO(), thumb, status: 'draft', liveUrl: '',
         updatedAt: Date.now(), createdAt: Date.now(), snapshot: snapshotState(),
       });
       state.editingId = id;
+      state.pendingTitle = '';
       targetDate = null;
       persistPosts();
     }
 
     const post = postById(state.editingId);
     const title = post.title;
+    // The "view full size" zoom rides along as extra bytes per card — drop it
+    // for this publish (falls back to the regular preview) rather than risk
+    // tripping the backend's request-size limit on a post with many images.
+    const hiTotal = cards.reduce((sum, c) => sum + (c.hi ? c.hi.length : 0), 0);
+    const includeHi = hiTotal > 0 && hiTotal < 2500000;
     const payload = {
+      // Reusing the same reviewId updates that post's record in place on the
+      // backend (same URL, comments untouched) instead of minting a new link
+      // — re-publishing a post already in review no longer orphans its thread
+      // behind a stale link every time a small change is made.
+      id: post.reviewId || undefined,
       title, date: post.date || todayISO(),
       brand: { name: state.name, handle: state.handle },
       caption: state.caption.trim(),
       hashtags: state.hashtags.trim(),
       firstComment: state.firstComment.trim(),
       cards: cards.map((c) => ({
-        name: c.name, img: c.img, caro: c.caro || '',
+        name: c.name, platform: c.platform || '', accent: c.accent || '', img: c.img,
+        hi: includeHi ? (c.hi || '') : '', imgs: c.imgs || [], caro: c.caro || '',
         customCaption: c.customCap || '', alt: c.alt || '',
       })),
     };
-    overlay(true, 'Publishing…');
+    overlay(true, post.reviewId ? 'Updating…' : 'Publishing…');
     let r;
     try { r = await window.api.publishPost(payload); }
     finally { overlay(false); }
     if (!r || !r.ok) return toast('Could not publish: ' + ((r && r.error) || 'unknown error'), 6000);
 
-    // Republishing an already-in-review post makes a brand-new link on the
-    // backend (there's no "update" endpoint) — keep the old thread's
-    // comments from just vanishing out of the app by archiving them first.
-    const hadPrevious = post.reviewId && post.reviewId !== r.id;
-    if (hadPrevious) {
-      post.reviewArchive = post.reviewArchive || [];
-      post.reviewArchive.push({
-        reviewId: post.reviewId, reviewUrl: post.reviewUrl,
-        comments: post.reviewComments || [], archivedAt: Date.now(),
-      });
-    }
-    post.reviewId = r.id; post.reviewUrl = r.url; post.reviewSeen = 0;
-    post.reviewComments = []; post.reviewNotified = 0;
+    const wasUpdate = !!r.updated;
+    post.reviewId = r.id; post.reviewUrl = r.url;
+    if (!wasUpdate) { post.reviewSeen = 0; post.reviewComments = []; post.reviewNotified = 0; }
     post.updatedAt = Date.now();
+    // Re-publishing an already-saved post (the normal "Update review" case)
+    // only touched review-link bookkeeping here — the calendar thumbnail and
+    // saved snapshot kept showing whatever images the post had when it was
+    // first saved, even after swapping in new ones and republishing.
+    post.thumb = await makeThumb();
+    post.snapshot = snapshotState();
     persistPosts();
     renderCalendar();
     updateReviewBadge();
+    render(); // refreshes the publish button's label ("Update review" once reviewId is set)
     try { await navigator.clipboard.writeText(r.url); } catch (e) {}
     toast(
-      hadPrevious
-        ? 'New link copied — this replaces the old one (its comments are archived on the post, still visible at its own URL): ' + r.url
+      wasUpdate
+        ? 'Review updated — same link, comments untouched: ' + r.url
         : 'Link copied — paste it anywhere: ' + r.url,
       9000, () => window.api.openUrl(r.url), 'Open');
+  }
+
+  /* ---------- compare tool: publish N candidate images for review ---------- */
+  // Reuses the same hosted review link as a normal post — each candidate is
+  // just its own card, so reviewers get the existing per-card approve /
+  // needs-work / comment UI for free, no backend changes needed.
+  async function publishCompareReview() {
+    const filled = state.compareItems
+      .map((item, i) => ({ item, i }))
+      .filter(({ item }) => item.img);
+    if (filled.length < 2) return;
+    const title = 'Image comparison — ' + new Date().toLocaleDateString();
+    overlay(true, 'Publishing…');
+    let r;
+    try {
+      // Full-quality candidates can easily add up to several MB combined,
+      // which the review backend's request-size limit rejects (HTTP 413) —
+      // shrink each one for the network payload only, same as the regular
+      // publish-for-review flow already does for its own mockup captures.
+      const cardImgs = await Promise.all(filled.map(({ item }) => compressForUpload(item.img)));
+      const payload = {
+        title, date: todayISO(),
+        brand: { name: state.name, handle: state.handle },
+        caption: state.compareCaption.trim(), hashtags: state.compareHashtags.trim(), firstComment: '',
+        cards: filled.map(({ i }, idx) => ({ name: compareLabel(i), img: cardImgs[idx] })),
+      };
+      r = await window.api.publishPost(payload);
+    } finally { overlay(false); }
+    if (!r || !r.ok) return toast('Could not publish: ' + ((r && r.error) || 'unknown error'), 6000);
+
+    state.posts.push({
+      id: uid('cmp'), title, date: todayISO(), thumb: filled[0].item.img, status: 'draft', liveUrl: '',
+      updatedAt: Date.now(), createdAt: Date.now(), snapshot: null, isComparison: true,
+      reviewId: r.id, reviewUrl: r.url, reviewSeen: 0, reviewComments: [], reviewNotified: 0,
+    });
+    persistPosts();
+    updateReviewBadge();
+    try { await navigator.clipboard.writeText(r.url); } catch (e) {}
+    toast('Link copied — paste it anywhere: ' + r.url, 9000, () => window.api.openUrl(r.url), 'Open');
   }
   /* ================= saved posts + calendar ================= */
   let targetDate = null; // date pre-selected for the next save (from "new post this day")
@@ -2304,7 +2708,7 @@
     if (!state.slides.length) return;
     const existing = state.editingId ? postById(state.editingId) : null;
     $('#saveTitle').value = existing ? existing.title
-      : (state.caption.trim().split('\n')[0].slice(0, 60) || 'Untitled post');
+      : (state.pendingTitle.trim() || state.caption.trim().split('\n')[0].slice(0, 60) || 'Untitled post');
     $('#saveDate').value = existing ? existing.date : (targetDate || todayISO());
     $('#saveAsNew').hidden = !existing;
     $('#modalWrap').hidden = false;
@@ -2327,6 +2731,7 @@
         updatedAt: Date.now(), createdAt: Date.now(), snapshot: snapshotState(),
       });
       state.editingId = id;
+      state.pendingTitle = '';
     }
     persistPosts();
     targetDate = null;
@@ -2368,6 +2773,29 @@
     }, 'Undo');
     updateReviewBadge();
   }
+  // Removing a post from the Reviews list only clears its review-tracking
+  // fields — the post itself (and its Calendar placement) stays untouched.
+  // Deleting the post entirely is still done from Calendar via deletePost().
+  function removeFromReviews(id) {
+    const p = postById(id);
+    if (!p) return;
+    const snapshot = {
+      reviewId: p.reviewId, reviewUrl: p.reviewUrl, reviewComments: p.reviewComments,
+      reviewSeen: p.reviewSeen, reviewNotified: p.reviewNotified, reviewArchived: p.reviewArchived,
+    };
+    p.reviewId = ''; p.reviewUrl = ''; p.reviewComments = []; p.reviewSeen = 0;
+    p.reviewNotified = 0; p.reviewArchived = false;
+    p.updatedAt = Date.now();
+    persistPosts();
+    renderReviews();
+    updateReviewBadge();
+    toast(`Removed “${p.title}” from Reviews`, 4000, () => {
+      Object.assign(p, snapshot);
+      persistPosts();
+      renderReviews();
+      updateReviewBadge();
+    }, 'Undo');
+  }
   function setPostStatus(id, status) {
     const p = postById(id);
     if (!p) return;
@@ -2400,13 +2828,52 @@
     state.captionOverride = {};
     state.slideOverride = {};
     state.editingId = null;
+    const prevPendingTitle = state.pendingTitle;
+    state.pendingTitle = '';
     $('#dayPanel').hidden = true;
     render();
     toast('Cleared — starting fresh', 6000, () => {
       applySnapshot(prevSnap);
       state.editingId = prevEditingId;
+      state.pendingTitle = prevPendingTitle;
       render();
     }, 'Undo');
+  }
+
+  function currentProjectTitle() {
+    return state.editingId ? (postById(state.editingId)?.title || '') : state.pendingTitle;
+  }
+  function renameProject(rawTitle) {
+    const title = rawTitle.trim().slice(0, 120);
+    if (!title) return;
+    if (state.editingId) {
+      const post = postById(state.editingId);
+      if (post && post.title !== title) {
+        post.title = title;
+        post.updatedAt = Date.now();
+        persistPosts();
+        renderCalendar();
+      }
+    } else {
+      state.pendingTitle = title;
+    }
+    render();
+  }
+  function startTitleEdit() {
+    if (state.view !== 'focus' && state.view !== 'board') return;
+    const span = $('#tbTitle'), input = $('#tbTitleInput');
+    input.value = currentProjectTitle();
+    span.hidden = true;
+    input.hidden = false;
+    input.focus();
+    input.select();
+  }
+  let suppressTitleCommit = false;
+  function endTitleEdit(commit) {
+    const span = $('#tbTitle'), input = $('#tbTitleInput');
+    if (commit) renameProject(input.value);
+    input.hidden = true;
+    span.hidden = false;
   }
 
   function newPost(date) {
@@ -2416,6 +2883,7 @@
     state.captionOverride = {};
     state.slideOverride = {};
     state.editingId = null;
+    state.pendingTitle = '';
     targetDate = date || null;
     $('#dayPanel').hidden = true;
     setView('focus');
@@ -2436,7 +2904,9 @@
   };
   function postsByDate() {
     const by = {};
-    state.posts.forEach((p) => { (by[p.date] = by[p.date] || []).push(p); });
+    // Compare-tool posts exist only to carry a review thread — they never
+    // had a Calendar placement, so they're excluded from every date bucket.
+    state.posts.forEach((p) => { if (p.isComparison) return; (by[p.date] = by[p.date] || []).push(p); });
     Object.values(by).forEach((a) => a.sort((x, y) => x.createdAt - y.createdAt));
     return by;
   }
@@ -2604,9 +3074,11 @@
       row.querySelector('.cl-thumb').addEventListener('click', openReview);
 
       const acts = el('div', 'reviews-row-acts');
-      const editBtn = el('button', 'btn btn-sm', 'Edit post');
-      editBtn.addEventListener('click', (e) => { e.stopPropagation(); openPost(p.id); });
-      acts.appendChild(editBtn);
+      if (!p.isComparison) {
+        const editBtn = el('button', 'btn btn-sm', 'Edit post');
+        editBtn.addEventListener('click', (e) => { e.stopPropagation(); openPost(p.id); });
+        acts.appendChild(editBtn);
+      }
       if (isArchived) {
         const unBtn = el('button', 'btn btn-sm', 'Unarchive');
         unBtn.addEventListener('click', (e) => {
@@ -2627,10 +3099,15 @@
         acts.appendChild(archBtn);
       }
       const delBtn = el('button', 'btn btn-sm dp-danger', 'Delete');
+      delBtn.title = p.isComparison
+        ? 'Delete this comparison'
+        : 'Remove this review — the post stays on your Calendar';
       delBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        deletePost(p.id);
-        renderReviews();
+        // A comparison post has no Calendar placement to protect — deleting
+        // it here should remove it outright rather than leave an orphan.
+        if (p.isComparison) { deletePost(p.id); renderReviews(); }
+        else removeFromReviews(p.id);
       });
       acts.appendChild(delBtn);
       row.appendChild(acts);
@@ -2643,6 +3120,217 @@
     done.forEach((p) => doneWrap.appendChild(rowFor(p, false)));
     const archWrap = $('#reviewsArchivedList'); archWrap.innerHTML = '';
     archived.forEach((p) => archWrap.appendChild(rowFor(p, true)));
+  }
+
+  /* ---------- auto clip ---------- */
+  function mmssToSec(s) {
+    // Gemini sticks to m:ss for anything under an hour but may switch to
+    // h:mm:ss once a recording runs past that, so both are accepted.
+    const parts = String(s || '0:00').trim().split(':').map((p) => parseFloat(p) || 0);
+    if (!parts.length || parts.some((p) => Number.isNaN(p))) return 0;
+    if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+    if (parts.length === 2) return parts[0] * 60 + parts[1];
+    return Math.max(0, parts[0]);
+  }
+  function secToMMSS(s) {
+    s = Math.max(0, Math.round(s || 0));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  }
+
+  function acSelectedSegments() {
+    return state.autoClip.segments.filter((s) => s.selected);
+  }
+  function acTotalDuration() {
+    return acSelectedSegments().reduce((sum, s) => sum + Math.max(0, s.end - s.start), 0);
+  }
+
+  function renderAutoClip() {
+    const ac = state.autoClip;
+    $('#acEmpty').hidden = !!ac.path;
+    $('#acWorking').hidden = !ac.path;
+    if (!ac.path) return;
+
+    $('#acSourceName').textContent = ac.name;
+    $('#acSourceDur').textContent = ac.duration ? `${secToMMSS(ac.duration)} long` : '';
+
+    const working = ac.status === 'extracting' || ac.status === 'analyzing' || ac.status === 'rendering';
+    $('#acStatus').hidden = !working;
+    $('#acStatusText').textContent = ac.status === 'extracting' ? 'Extracting audio…'
+      : ac.status === 'analyzing' ? 'Listening for the best moments — this can take a minute or two…'
+      : ac.status === 'rendering' ? 'Rendering the clip…' : '';
+    $('#acFindWrap').hidden = working || ac.segments.length > 0;
+    $('#acFindBtn').disabled = working;
+
+    $('#acResults').hidden = ac.segments.length === 0;
+    if (ac.segments.length) acBuildList();
+  }
+
+  function acBuildList() {
+    const list = $('#acList');
+    list.innerHTML = '';
+    state.autoClip.segments.forEach((seg, i) => {
+      const row = el('div', 'ac-row' + (seg.selected ? ' on' : ''));
+      row.dataset.id = seg.id;
+
+      const check = el('label', 'ac-row-check');
+      check.innerHTML = `<input type="checkbox"${seg.selected ? ' checked' : ''}>`;
+      check.querySelector('input').addEventListener('change', (e) => {
+        seg.selected = e.currentTarget.checked;
+        row.classList.toggle('on', seg.selected);
+        acUpdateFooter();
+      });
+      row.appendChild(check);
+
+      const thumb = el('div', 'ac-thumb');
+      thumb.textContent = '…';
+      row.appendChild(thumb);
+      if (seg.thumb) thumb.innerHTML = `<img src="${seg.thumb}" alt="">`;
+      else acLoadThumb(seg, thumb);
+
+      const main = el('div', 'ac-row-main');
+      main.innerHTML =
+        `<div class="ac-row-top"><span class="ac-score">${seg.score}</span><span class="ac-why">${escapeHtml(seg.why || '')}</span></div>` +
+        `<div class="ac-transcript">${escapeHtml(seg.transcript || '')}</div>`;
+      const nudgeRow = el('div', 'ac-nudge-row');
+      nudgeRow.innerHTML =
+        `<span class="ac-nudge" data-f="start"><button data-d="-1">−</button><span>${secToMMSS(seg.start)}</span><button data-d="1">+</button></span>` +
+        `→` +
+        `<span class="ac-nudge" data-f="end"><button data-d="-1">−</button><span>${secToMMSS(seg.end)}</span><button data-d="1">+</button></span>` +
+        `<span>${Math.round(seg.end - seg.start)}s</span>`;
+      nudgeRow.querySelectorAll('button').forEach((b) => {
+        b.addEventListener('click', () => {
+          const field = b.closest('.ac-nudge').dataset.f;
+          const delta = +b.dataset.d;
+          if (field === 'start') seg.start = Math.max(0, Math.min(seg.start + delta, seg.end - 1));
+          else seg.end = Math.min(state.autoClip.duration || seg.end + delta, Math.max(seg.end + delta, seg.start + 1));
+          acBuildList();
+          acUpdateFooter();
+        });
+      });
+      main.appendChild(nudgeRow);
+      row.appendChild(main);
+
+      const order = el('div', 'ac-row-order');
+      const up = el('button'); up.textContent = '▲'; up.disabled = i === 0;
+      const down = el('button'); down.textContent = '▼'; down.disabled = i === state.autoClip.segments.length - 1;
+      up.addEventListener('click', () => {
+        const arr = state.autoClip.segments;
+        [arr[i - 1], arr[i]] = [arr[i], arr[i - 1]];
+        acBuildList();
+      });
+      down.addEventListener('click', () => {
+        const arr = state.autoClip.segments;
+        [arr[i + 1], arr[i]] = [arr[i], arr[i + 1]];
+        acBuildList();
+      });
+      order.appendChild(up); order.appendChild(down);
+      row.appendChild(order);
+
+      list.appendChild(row);
+    });
+    acUpdateFooter();
+  }
+
+  function acUpdateFooter() {
+    const n = acSelectedSegments().length;
+    const dur = acTotalDuration();
+    $('#acTotal').textContent = n ? `${n} moment${n === 1 ? '' : 's'} selected · ~${secToMMSS(dur)} total` : 'Nothing selected yet';
+    $('#acRenderBtn').disabled = n === 0 || state.autoClip.status === 'rendering';
+  }
+
+  // Frame thumbnails are fetched one at a time (not in parallel) — each one
+  // spawns an ffmpeg process, and a results list with a dozen candidates
+  // would otherwise hit the machine with a dozen simultaneous decodes.
+  let _acThumbQueue = Promise.resolve();
+  function acLoadThumb(seg, thumbEl) {
+    _acThumbQueue = _acThumbQueue.then(async () => {
+      if (seg.thumb) return; // already loaded by a previous render pass
+      const r = await window.api.video.extractFrame(state.autoClip.path, seg.start + Math.min(1, (seg.end - seg.start) / 2));
+      if (r.ok) {
+        seg.thumb = r.dataUrl;
+        const live = document.querySelector(`.ac-row[data-id="${seg.id}"] .ac-thumb`);
+        if (live) live.innerHTML = `<img src="${seg.thumb}" alt="">`;
+      }
+    }).catch(() => {});
+  }
+
+  async function acPickVideo() {
+    const r = await window.api.video.pick();
+    if (!r.ok) { if (!r.canceled) toast(r.error || 'Could not open that video', 6000); return; }
+    state.autoClip = {
+      path: r.path, name: r.name, duration: r.duration,
+      status: 'idle', segments: [],
+    };
+    render();
+  }
+
+  async function acFindMoments() {
+    const ac = state.autoClip;
+    const caps = await window.AI.caps();
+    if (!caps.gemini) { toast(window.AI.explain({ kind: 'no-vision' }), 7000); return; }
+
+    ac.status = 'extracting';
+    render();
+    const audio = await window.api.video.extractAudio(ac.path);
+    if (!audio.ok) {
+      ac.status = 'idle'; render();
+      return toast(audio.error || 'Could not extract audio from that video', 6000);
+    }
+
+    ac.status = 'analyzing';
+    render();
+    let out;
+    try {
+      out = await window.AI.run('videoMoments', { mime: audio.mime, data: audio.data, durationSec: ac.duration });
+    } catch (e) {
+      ac.status = 'idle'; render();
+      return toast(window.AI.explain(e), 7000);
+    }
+
+    const raw = (out && out.segments) || [];
+    const parsed = raw.map((s, i) => ({
+      id: 'seg' + i + '-' + Date.now(),
+      start: mmssToSec(s.start), end: mmssToSec(s.end),
+      transcript: String(s.transcript || ''), why: String(s.why || ''),
+      score: Math.max(1, Math.min(10, Math.round(+s.score) || 5)),
+      selected: false, thumb: '',
+    })).filter((s) => s.end > s.start);
+
+    // Default a reasonable short clip: take the highest-scored moments up to
+    // ~60s combined (Opus Clip's own defaults land in roughly this range),
+    // then lay the chosen ones out in the order they happened in the source.
+    // Candidates routinely overlap — a broad "the whole story" span and a
+    // tighter span inside it both score well — so picks that overlap an
+    // already-selected one are skipped, or the default clip would replay
+    // the same lines back to back.
+    const byScore = [...parsed].sort((a, b) => b.score - a.score);
+    let budget = 60;
+    for (const s of byScore) {
+      if (budget <= 0) break;
+      const overlaps = parsed.some((o) => o.selected && o.start < s.end && s.start < o.end);
+      if (overlaps) continue;
+      s.selected = true;
+      budget -= (s.end - s.start);
+    }
+    parsed.sort((a, b) => a.start - b.start);
+
+    ac.segments = parsed;
+    ac.status = 'ready';
+    render();
+    if (!parsed.length) toast('No clear moments found — try a different video', 6000);
+  }
+
+  async function acRenderClip() {
+    const segs = acSelectedSegments().map((s) => ({ start: s.start, end: s.end }));
+    if (!segs.length) return;
+    state.autoClip.status = 'rendering';
+    render();
+    overlay(true, 'Rendering clip…');
+    let r;
+    try { r = await window.api.video.renderClip(state.autoClip.path, segs); }
+    finally { overlay(false); state.autoClip.status = 'ready'; render(); }
+    if (!r.ok) { if (!r.canceled) toast(r.error || 'Could not render the clip', 7000); return; }
+    toast('Clip saved → ' + r.path, 7000, () => window.api.revealFile(r.path), 'Show in Finder');
   }
 
   /* ---------- review-feedback round-trip ---------- */
@@ -2921,7 +3609,7 @@
       const b = e.target.closest('button[data-nav]');
       if (!b) return;
       setView(b.dataset.nav === 'calendar' ? 'calendar' : b.dataset.nav === 'board' ? 'board'
-        : b.dataset.nav === 'reviews' ? 'reviews' : 'focus');
+        : b.dataset.nav === 'reviews' ? 'reviews' : b.dataset.nav === 'autoclip' ? 'autoclip' : 'focus');
       if (b.dataset.nav === 'reviews') pollReviewLinks();
     });
 
@@ -2931,6 +3619,11 @@
     });
 
     $('#heroChoose').addEventListener('click', () => $('#fileInput').click());
+
+    $('#acPickBtn').addEventListener('click', acPickVideo);
+    $('#acChangeBtn').addEventListener('click', acPickVideo);
+    $('#acFindBtn').addEventListener('click', () => acFindMoments().catch((e) => toast(String((e && e.message) || e), 6000)));
+    $('#acRenderBtn').addEventListener('click', () => acRenderClip().catch((e) => toast(String((e && e.message) || e), 6000)));
   }
 
   /* ---------- boot ---------- */
@@ -2948,6 +3641,7 @@
     initCalendar();
     initSidebarResize();
     initToolPanels();
+    initCompare();
     updateReviewBadge();
     setTimeout(pollReviewLinks, 4000);
     setInterval(pollReviewLinks, 60000);
@@ -2959,6 +3653,16 @@
     });
     $('#btnPublishReview').addEventListener('click', guard(publishForReview));
     $('#btnStartOver').addEventListener('click', startOver);
+
+    $('#tbTitle').addEventListener('click', startTitleEdit);
+    $('#tbTitleInput').addEventListener('blur', () => {
+      if (suppressTitleCommit) { suppressTitleCommit = false; return; }
+      endTitleEdit(true);
+    });
+    $('#tbTitleInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); $('#tbTitleInput').blur(); }
+      else if (e.key === 'Escape') { suppressTitleCommit = true; endTitleEdit(false); $('#tbTitleInput').blur(); }
+    });
 
     // view switch
     $('#viewSwitch').addEventListener('click', (e) => {

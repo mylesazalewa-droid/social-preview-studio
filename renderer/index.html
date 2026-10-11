@@ -22,6 +22,7 @@
         <button class="nav-item" data-nav="board"><span class="ni-ico" data-i="secBoard"></span>Board</button>
         <button class="nav-item" data-nav="calendar"><span class="ni-ico" data-i="secCalendar"></span>Calendar</button>
         <button class="nav-item" data-nav="reviews"><span class="ni-ico" data-i="comment"></span>Reviews<span class="notif-badge nav-badge" id="checkReviewsBadge" hidden></span></button>
+        <button class="nav-item" data-nav="autoclip"><span class="ni-ico" data-i="secClip"></span>Auto Clip</button>
       </nav>
 
       <div class="side-tools" id="sideTools">
@@ -38,6 +39,11 @@
         <button class="tool-btn" data-panel="hash" style="--tc: 232 91 145">
           <span class="tb-tile"><span class="tb-i" data-i="secSparkle"></span></span>
           <span class="tb-txt"><b>Hashtags</b><small>Sets &amp; first comment</small></span>
+          <span class="tb-arrow" data-i="chevR"></span>
+        </button>
+        <button class="tool-btn" data-panel="compare" style="--tc: 55 180 140">
+          <span class="tb-tile"><span class="tb-i" data-i="secCompare"></span></span>
+          <span class="tb-txt"><b>Compare</b><small>Test two images side by side</small></span>
           <span class="tb-arrow" data-i="chevR"></span>
         </button>
         <button class="tool-btn" data-panel="ai" style="--tc: 139 122 255">
@@ -115,6 +121,39 @@
             </div>
           </details>
           <input type="file" id="fmtFileInput" accept="image/*" multiple hidden />
+        </div>
+      </div>
+
+      <div class="flyout" id="fly-compare" hidden style="--tc: 55 180 140">
+        <div class="fly-head">
+          <span class="fly-ico" data-i="secCompare"></span>
+          <span class="fly-title">Compare</span>
+          <button class="fly-close" data-i="plus" aria-label="Close"></button>
+        </div>
+        <div class="fly-body">
+          <p class="hint">Upload a few images to see them side by side, mocked up in a real platform — pick a winner, or send them out for the team to weigh in.</p>
+          <label class="field">
+            <span>Caption <small>· only used here, not your main post</small></span>
+            <textarea id="compareCaption" rows="3" placeholder="Write a caption to test with these images…"></textarea>
+          </label>
+          <label class="field">
+            <span>Hashtags</span>
+            <textarea id="compareHashtags" rows="2" placeholder="#yourtags"></textarea>
+          </label>
+          <label class="field">
+            <span>Preview as</span>
+            <div class="select-pill">
+              <select id="comparePlatformSelect"></select>
+            </div>
+          </label>
+          <div class="compare-grid" id="compareList"></div>
+          <button id="compareAddBtn" class="ai-inline-btn ghost compare-add-btn" type="button">+ Add another image</button>
+          <input type="file" id="compareFileInput" accept="image/*" hidden />
+          <div class="compare-export-row">
+            <button id="compareExportPng" class="btn btn-sm" type="button" disabled>Save PNG</button>
+            <button id="compareExportPdf" class="btn btn-sm" type="button" disabled>Save PDF</button>
+          </div>
+          <button id="compareSendReview" class="btn btn-primary" type="button" disabled>Send for review</button>
         </div>
       </div>
 
@@ -344,7 +383,8 @@
     <main class="stage">
       <header class="topbar">
         <div class="tb-left">
-          <span class="tb-title" id="tbTitle">Compose</span>
+          <span class="tb-title" id="tbTitle" title="Click to rename this project">Compose</span>
+          <input class="tb-title-input" id="tbTitleInput" type="text" maxlength="120" hidden />
           <div class="view-switch" id="viewSwitch" hidden>
             <button data-view="focus" class="on">Focus</button>
             <button data-view="board">Board</button>
@@ -423,6 +463,8 @@
           </div>
         </div>
 
+        <div id="compareStage" class="compare-stage" hidden></div>
+
         <div id="boardView" class="board-scroll" hidden>
           <div id="emptyState" class="empty-hero sm">
             <span class="eh-ico" data-i="secBoard"></span>
@@ -463,6 +505,46 @@
             <h2>Archived <span class="reviews-count" id="reviewsArchivedCount"></span></h2>
             <div class="cal-list" id="reviewsArchivedList"></div>
           </section>
+        </div>
+
+        <div id="autoClipView" class="autoclip-view" hidden>
+          <div class="empty-hero cal-empty" id="acEmpty">
+            <span class="eh-ico" data-i="secClip"></span>
+            <h1>Auto-clip a long video</h1>
+            <p>Import a sermon or event recording — the AI listens through it, finds the
+               strongest moments, and lets you pick and reorder which ones become one short clip.
+               Needs a free Google Gemini key (AI panel) and a video under about an hour.</p>
+            <button class="btn btn-primary btn-lg" id="acPickBtn">Choose a video…</button>
+          </div>
+
+          <div class="ac-working" id="acWorking" hidden>
+            <div class="ac-source">
+              <span class="ac-source-name" id="acSourceName"></span>
+              <span class="ac-source-dur" id="acSourceDur"></span>
+              <button class="btn btn-sm" id="acChangeBtn">Choose a different video</button>
+            </div>
+
+            <div class="ac-status" id="acStatus" hidden>
+              <div class="spinner"></div>
+              <span id="acStatusText">Working…</span>
+            </div>
+
+            <div class="ac-findwrap" id="acFindWrap">
+              <button class="btn btn-primary" id="acFindBtn">Find the best moments</button>
+            </div>
+
+            <div class="ac-results" id="acResults" hidden>
+              <div class="ac-results-head">
+                <h2>Candidate moments</h2>
+                <span class="ac-hint">Check the ones to use, reorder with the arrows, nudge the in/out points if needed.</span>
+              </div>
+              <div class="ac-list" id="acList"></div>
+              <div class="ac-footer">
+                <div class="ac-total" id="acTotal"></div>
+                <button class="btn btn-primary btn-lg" id="acRenderBtn" disabled>Render clip</button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </main>
