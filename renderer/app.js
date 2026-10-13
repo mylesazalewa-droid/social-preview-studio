@@ -1910,7 +1910,19 @@
     new Promise((_, rej) => setTimeout(() => rej(new Error((what || 'render') + ' timed out')), ms)),
   ]);
 
+  // Every capture is rendered against a white background (below), so it also
+  // has to use the light preview theme — in dark preview mode the mockup text
+  // is near-white, which came out as pale, hard-to-read captions on white in
+  // review links and exports. The live app's theme is restored afterwards.
   async function snapshot(node, opts) {
+    const pv = document.body.dataset.pv;
+    const flip = pv !== 'light';
+    if (flip) { document.body.dataset.pv = 'light'; await raf(); }
+    try { return await snapshotNode(node, opts); }
+    finally { if (flip) document.body.dataset.pv = pv; }
+  }
+
+  async function snapshotNode(node, opts) {
     if (!node) throw new Error('nothing to capture');
     // warm up: make sure every <img> in the node has decoded first
     await Promise.all([...node.querySelectorAll('img')].map((im) =>
